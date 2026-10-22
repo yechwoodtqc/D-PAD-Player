@@ -1,0 +1,37 @@
+name: Android 6 LG Exalt Compatibility APK
+
+on:
+  push:
+    branches:
+      - "compat/android-6-lg-exalt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Build Android 6 compatible debug APK
+        run: |
+          chmod +x ./gradlew
+          ./gradlew :app:assembleDebug --no-daemon --console=plain
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dpad-player-android-6-lg-exalt
+          path: app/build/outputs/apk/debug/dpadmp3.apk
+          if-no-files-found: error
+          retention-days: 14
