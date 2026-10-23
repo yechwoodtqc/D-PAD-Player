@@ -285,4 +285,8 @@
     <string name="dialog_sleep_timer_minutes">%1$d minutes</string>
     <string name="sleep_timer_status">Sleep %1$d:%2$02d</string>
     <string name="dialog_speed_title">Playback speed</string>
+    <string name="pref_export_logcat_title">Export diagnostic log</string>
+    <string name="pref_export_logcat_summary">Save recent system and app Logcat output as a text file to share for troubleshooting.</string>
+    <string name="logcat_export_success">Logcat saved. Attach the text file to your reply.</string>
+    <string name="logcat_export_failed">Logcat export may have failed: %1$s</string>
 </resources>
