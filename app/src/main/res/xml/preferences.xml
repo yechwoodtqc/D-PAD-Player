@@ -79,4 +79,10 @@
         app:summary="@string/pref_show_top_bar_summary"
         app:icon="@drawable/ic_settings_theme" />
 
+    <Preference
+        app:key="export_logcat"
+        app:title="@string/pref_export_logcat_title"
+        app:summary="@string/pref_export_logcat_summary"
+        app:icon="@drawable/ic_settings_seek" />
+
 </PreferenceScreen>
