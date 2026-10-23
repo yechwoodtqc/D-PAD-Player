@@ -6,10 +6,17 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.fragment.app.activityViewModels
+import androidx.lifecycle.lifecycleScope
+import androidx.preference.Preference
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceFragmentCompat
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.snackbar.Snackbar
+import androidx.activity.result.contract.ActivityResultContracts
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Settings screen — launched from the three-dot menu in LibraryFragment.
@@ -25,10 +32,47 @@ class SettingsFragment : PreferenceFragmentCompat() {
 
     private val viewModel: MusicViewModel by activityViewModels()
 
+    private val createLogcatDocument =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+            if (uri != null) exportLogcat(uri)
+        }
+
+    private fun exportLogcat(uri: android.net.Uri) {
+        val appContext = requireContext().applicationContext
+        viewLifecycleOwner.lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                try {
+                    val process = ProcessBuilder(
+                        "logcat", "-d", "-v", "threadtime", "-t", "4000"
+                    ).redirectErrorStream(true).start()
+                    val logText = process.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                    val exitCode = process.waitFor()
+                    appContext.contentResolver.openOutputStream(uri, "wt")?.use { output ->
+                        output.write(logText.toByteArray(Charsets.UTF_8))
+                    } ?: error("Could not open the selected file")
+                    if (exitCode == 0) null else "logcat exited with code $exitCode. The output was saved; it may contain an error message."
+                } catch (e: Exception) {
+                    e.message ?: e.javaClass.simpleName
+                }
+            }
+            val message = if (result == null) {
+                getString(R.string.logcat_export_success)
+            } else {
+                getString(R.string.logcat_export_failed, result)
+            }
+            Snackbar.make(requireView(), message, Snackbar.LENGTH_LONG).show()
+        }
+    }
+
     // ── PreferenceFragmentCompat contract ─────────────────────────────────────
 
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         setPreferencesFromResource(R.xml.preferences, rootKey)
+
+        findPreference<Preference>("export_logcat")?.setOnPreferenceClickListener {
+            createLogcatDocument.launch("dpad-logcat.txt")
+            true
+        }
 
         // Theme — apply immediately on change
         findPreference<ListPreference>("theme")?.setOnPreferenceChangeListener { _, newValue ->
