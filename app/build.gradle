@@ -124,7 +124,7 @@ dependencies {
     
     // Jaudiotagger for accurate ID3 / FLAC metadata
     // Use the legacy release: jaudiotagger 3.x calls File.toPath(), which is unavailable on Android 6/API 23.
-    implementation 'net.jthink:jaudiotagger:2.2.3'
+    implementation 'net.jthink:jaudiotagger:2.2.5'
 
     // Unit testing
     testImplementation 'junit:junit:4.13.2'
