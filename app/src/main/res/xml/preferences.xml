@@ -49,7 +49,7 @@
         app:key="keep_service_when_paused"
         app:title="@string/pref_keep_service_title"
         app:summary="@string/pref_keep_service_summary"
-        app:defaultValue="true"
+        app:defaultValue="false"
         app:icon="@drawable/ic_settings_seek" />
 
     <SwitchPreferenceCompat

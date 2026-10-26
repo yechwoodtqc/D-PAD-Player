@@ -16,6 +16,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.widget.RemoteViews
 import android.os.SystemClock
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
@@ -189,12 +190,13 @@ class PlaybackService : Service() {
                         // appears in the status bar and doesn't keep the process alive.
                         requestServiceStop(removeNotification = true)
                     } else {
-                        if (!keepServiceWhenPaused()) {
+                        // API 23 foreground notifications cannot reliably be swiped away.
+                        // Remove the service when genuinely paused by default, but never
+                        // stop it while buffering or changing tracks.
+                        if (!keepServiceWhenPaused() && !player.playWhenReady && !isTransitioning) {
                             requestServiceStop(removeNotification = true)
                             return
                         }
-                        // Keep the notification in the foreground to prevent the system
-                        // from killing the service while paused.
                         tryStartForeground()
                     }
                 }
@@ -246,7 +248,7 @@ class PlaybackService : Service() {
 
     private fun keepServiceWhenPaused(): Boolean {
         val prefs = PreferenceManager.getDefaultSharedPreferences(this)
-        return prefs.getBoolean(PREF_KEEP_SERVICE_WHEN_PAUSED, true)
+        return prefs.getBoolean(PREF_KEEP_SERVICE_WHEN_PAUSED, false)
     }
 
     private fun seekBy(deltaMs: Long) {
@@ -796,32 +798,22 @@ class PlaybackService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        val prevAction = NotificationCompat.Action.Builder(
-            R.drawable.ic_skip_previous, getString(R.string.notification_action_previous),
-            prevPendingIntent
-        ).build()
-
+        // Custom API 23 layout uses icon-only buttons; keep text labels on newer APIs.
+        val oldNotificationUi = Build.VERSION.SDK_INT <= Build.VERSION_CODES.M
+        val prevTitle = if (oldNotificationUi) "" else getString(R.string.notification_action_previous)
+        val playTitle = if (oldNotificationUi) "" else getString(
+            if (player.isPlaying) R.string.notification_action_pause else R.string.notification_action_play
+        )
+        val nextTitle = if (oldNotificationUi) "" else getString(R.string.notification_action_next)
+        val stopTitle = if (oldNotificationUi) "" else getString(R.string.notification_action_stop)
+        val prevAction = NotificationCompat.Action.Builder(R.drawable.ic_skip_previous, prevTitle, prevPendingIntent).build()
         val playPauseAction = if (player.isPlaying) {
-            NotificationCompat.Action.Builder(
-                R.drawable.ic_pause, getString(R.string.notification_action_pause),
-                pausePendingIntent
-            ).build()
+            NotificationCompat.Action.Builder(R.drawable.ic_pause, playTitle, pausePendingIntent).build()
         } else {
-            NotificationCompat.Action.Builder(
-                R.drawable.ic_play, getString(R.string.notification_action_play),
-                playPendingIntent
-            ).build()
+            NotificationCompat.Action.Builder(R.drawable.ic_play, playTitle, playPendingIntent).build()
         }
-
-        val nextAction = NotificationCompat.Action.Builder(
-            R.drawable.ic_skip_next, getString(R.string.notification_action_next),
-            nextPendingIntent
-        ).build()
-
-        val stopAction = NotificationCompat.Action.Builder(
-            R.drawable.ic_stop, getString(R.string.notification_action_stop),
-            stopPendingIntent
-        ).build()
+        val nextAction = NotificationCompat.Action.Builder(R.drawable.ic_skip_next, nextTitle, nextPendingIntent).build()
+        val stopAction = NotificationCompat.Action.Builder(R.drawable.ic_stop, stopTitle, stopPendingIntent).build()
 
         // Load album art bitmap for the large icon (notification) and lock screen
         val artBitmap = t?.albumArtUri?.let { loadAlbumArtBitmap(it) }
@@ -849,6 +841,22 @@ class PlaybackService : Service() {
                     .setCancelButtonIntent(stopPendingIntent)
             )
 
+        // API 23/non-touch devices get fixed-width focusable icon controls instead
+        // of the stock action row which expands text buttons across the notification.
+        if (oldNotificationUi) {
+            val playPausePendingIntent = if (player.isPlaying) pausePendingIntent else playPendingIntent
+            val compact = RemoteViews(packageName, R.layout.notification_player_compact)
+            populateNotificationRemoteViews(
+                compact, t, openIntent, prevPendingIntent, playPausePendingIntent, nextPendingIntent, null
+            )
+            builder.setCustomContentView(compact)
+            val expanded = RemoteViews(packageName, R.layout.notification_player_expanded)
+            populateNotificationRemoteViews(
+                expanded, t, openIntent, prevPendingIntent, playPausePendingIntent, nextPendingIntent, stopPendingIntent
+            )
+            builder.setCustomBigContentView(expanded)
+        }
+
         // Album art as large icon in the notification shade
         if (artBitmap != null) {
             builder.setLargeIcon(artBitmap)
@@ -864,6 +872,37 @@ class PlaybackService : Service() {
         }
 
         return builder.build()
+    }
+
+    private fun populateNotificationRemoteViews(
+        views: RemoteViews,
+        track: Track?,
+        openIntent: PendingIntent,
+        prevPendingIntent: PendingIntent,
+        playPausePendingIntent: PendingIntent,
+        nextPendingIntent: PendingIntent,
+        stopPendingIntent: PendingIntent?
+    ) {
+        views.setTextViewText(R.id.notification_title, track?.title ?: getString(R.string.app_name))
+        views.setTextViewText(R.id.notification_subtitle, track?.let { it.artist + " — " + it.album } ?: "")
+        views.setOnClickPendingIntent(R.id.notification_container, openIntent)
+        views.setOnClickPendingIntent(R.id.notification_previous, prevPendingIntent)
+        views.setContentDescription(R.id.notification_previous, getString(R.string.notification_action_previous))
+        views.setOnClickPendingIntent(R.id.notification_play_pause, playPausePendingIntent)
+        views.setImageViewResource(
+            R.id.notification_play_pause,
+            if (player.isPlaying) R.drawable.ic_pause else R.drawable.ic_play
+        )
+        views.setContentDescription(
+            R.id.notification_play_pause,
+            getString(if (player.isPlaying) R.string.notification_action_pause else R.string.notification_action_play)
+        )
+        views.setOnClickPendingIntent(R.id.notification_next, nextPendingIntent)
+        views.setContentDescription(R.id.notification_next, getString(R.string.notification_action_next))
+        if (stopPendingIntent != null) {
+            views.setOnClickPendingIntent(R.id.notification_stop, stopPendingIntent)
+            views.setContentDescription(R.id.notification_stop, getString(R.string.notification_action_stop))
+        }
     }
 
     private fun tryStartForeground() {

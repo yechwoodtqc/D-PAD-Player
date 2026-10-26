@@ -125,7 +125,7 @@
     <!-- Settings titles/summaries -->
     <string name="pref_seek_title">Seek and skip duration</string>
     <string name="pref_keep_service_title">Keep notification when paused</string>
-    <string name="pref_keep_service_summary">When off, playback service stops and notification is removed as soon as audio is paused</string>
+    <string name="pref_keep_service_summary">When off (default), pausing removes the notification. Turn on to keep playback controls available while paused.</string>
     <string name="pref_audio_focus_pause_on_duck_title">Pause for transient audio interruptions</string>
     <string name="pref_audio_focus_pause_on_duck_summary">When off, playback volume ducks for short interruptions instead of pausing</string>
 

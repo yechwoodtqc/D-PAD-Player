@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/notification_container"
+    android:layout_width="match_parent"
+    android:layout_height="64dp"
+    android:background="#FFF7F7F7"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingStart="8dp"
+    android:paddingEnd="4dp">
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:paddingEnd="4dp">
+
+        <TextView
+            android:id="@+id/notification_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="#FF202124"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/notification_subtitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="#FF5F6368"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <ImageButton
+        android:id="@+id/notification_previous"
+        android:layout_width="40dp"
+        android:layout_height="48dp"
+        android:background="@android:drawable/btn_default"
+        android:contentDescription="@string/notification_action_previous"
+        android:focusable="true"
+        android:padding="8dp"
+        android:scaleType="centerInside"
+        android:src="@drawable/ic_skip_previous" />
+
+    <ImageButton
+        android:id="@+id/notification_play_pause"
+        android:layout_width="40dp"
+        android:layout_height="48dp"
+        android:background="@android:drawable/btn_default"
+        android:contentDescription="@string/notification_action_play"
+        android:focusable="true"
+        android:padding="8dp"
+        android:scaleType="centerInside"
+        android:src="@drawable/ic_play" />
+
+    <ImageButton
+        android:id="@+id/notification_next"
+        android:layout_width="40dp"
+        android:layout_height="48dp"
+        android:background="@android:drawable/btn_default"
+        android:contentDescription="@string/notification_action_next"
+        android:focusable="true"
+        android:padding="8dp"
+        android:scaleType="centerInside"
+        android:src="@drawable/ic_skip_next" />
+</LinearLayout>

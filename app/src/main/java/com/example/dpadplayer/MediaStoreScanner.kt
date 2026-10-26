@@ -2,7 +2,7 @@ package com.example.dpadplayer
 
 import android.content.ContentUris
 import android.content.Context
-// MediaMetadataRetriever was previously used; we now use jaudiotagger for robust tag parsing
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import kotlinx.coroutines.delay
@@ -12,10 +12,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import android.provider.MediaStore
 import com.example.dpadplayer.playback.Track
-import org.jaudiotagger.audio.AudioFileIO
-import org.jaudiotagger.tag.FieldKey
 import java.io.File
-import java.io.FileOutputStream
 import com.example.dpadplayer.db.AppDatabase
 
 /**
@@ -189,7 +186,7 @@ object MediaStoreScanner {
         return rows
     }
 
-    // ── Step 2: enrich with jaudiotagger (ID3/Vorbis tags) ─────────────────
+    // ── Step 2: enrich with MediaMetadataRetriever metadata ─────────────────
 
     private fun enrichWithRetriever(row: RawRow): Track {
         var title       = row.msTitle.ifBlank { "Unknown" }
@@ -208,11 +205,8 @@ object MediaStoreScanner {
         var duration    = row.msDuration
         val mediaStoreAlbumArtUri = Track.albumArtUri(row.msAlbumId)
 
-        // Heavy per-file parsing (jaudiotagger/AudioFileIO) is intentionally
-        // avoided during the bulk MediaStore scan because opening every file
-        // causes large memory and file-descriptor pressure on devices with
-        // large libraries. Tags and embedded artwork should be loaded lazily
-        // via loadEmbeddedArtwork() or a dedicated per-track enrichment call.
+        // Detailed metadata and embedded artwork are read lazily with Android's
+        // MediaMetadataRetriever, rather than during the bulk MediaStore scan.
 
         return Track(
             id              = row.id,
@@ -257,163 +251,181 @@ object MediaStoreScanner {
      * detail view is opened — NOT during the bulk library scan.
      */
     fun loadEmbeddedArtwork(context: Context, track: com.example.dpadplayer.playback.Track): Uri? {
-        if (track.filePath.isBlank()) return null
-        val cached = File(context.cacheDir, "album_art/track_${track.id}.jpg")
+        val cached = File(context.cacheDir, "album_art/track_" + track.id + ".jpg")
         if (cached.exists()) return Uri.fromFile(cached)
-        return try {
-            val readable = resolveReadableFile(context, track) ?: return null
-            val audioFile = AudioFileIO.read(readable)
-            val artwork = audioFile.tag?.firstArtwork ?: return null
-            val bytes = artwork.binaryData ?: return null
-            persistEmbeddedArtwork(context, track.id, bytes)
-        } catch (_: Exception) { null }
+        val retriever = openMetadataRetriever(context, track) ?: return null
+        val bytes = try {
+            retriever.embeddedPicture
+        } catch (e: Exception) {
+            android.util.Log.w("MediaStoreScanner", "Could not read embedded artwork for track " + track.id, e)
+            null
+        } finally {
+            try { retriever.release() } catch (_: Exception) { }
+        } ?: return null
+        return persistEmbeddedArtwork(context, track.id, bytes, track.albumId)
     }
 
     /**
-     * Enrich a single Track by reading detailed tags and embedded artwork.
-     * Returns a new Track instance with enriched fields, or the original if
-     * enrichment fails.
+     * Open metadata through Android's media stack. Both the MediaStore URI and
+     * direct path are attempted because older devices and removable volumes
+     * can expose files differently. This avoids java.nio.file and third-party
+     * file-permission checks that are not available on API 23.
      */
-    fun enrichTrack(context: Context, track: com.example.dpadplayer.playback.Track): com.example.dpadplayer.playback.Track {
-        if (track.filePath.isBlank()) return track
+    private fun openMetadataRetriever(
+        context: Context,
+        track: com.example.dpadplayer.playback.Track
+    ): MediaMetadataRetriever? {
+        val uriRetriever = MediaMetadataRetriever()
         try {
-            val readable = resolveReadableFile(context, track) ?: return track
-            val audioFile = AudioFileIO.read(readable)
-            val tag = audioFile.tag
-
-            var title = track.title
-            var sortTitle = track.sortTitle
-            var artist = track.artist
-            var sortArtist = track.sortArtist
-            var albumArtist = track.albumArtist
-            var sortAlbumArtist = track.sortAlbumArtist
-            var album = track.album
-            var sortAlbum = track.sortAlbum
-            var trackNum = track.trackNumber
-            var discNum = track.discNumber
-            var year = track.year
-            var genre = track.genre
-            var duration = track.duration
-            var albumArtUri = track.albumArtUri
-
-            if (tag != null) {
-                fun getStr(key: FieldKey) = tag.getFirst(key)?.trim()?.takeIf { it.isNotEmpty() }
-
-                getStr(FieldKey.TITLE)?.let { title = it; sortTitle = it }
-                getStr(FieldKey.TITLE_SORT)?.let { sortTitle = it }
-
-                getStr(FieldKey.ARTIST)?.let { artist = it; sortArtist = it; albumArtist = it; sortAlbumArtist = it }
-                getStr(FieldKey.ARTIST_SORT)?.let { sortArtist = it }
-
-                getStr(FieldKey.ALBUM_ARTIST)?.let { albumArtist = it; sortAlbumArtist = it }
-                getStr(FieldKey.ALBUM_ARTIST_SORT)?.let { sortAlbumArtist = it }
-
-                getStr(FieldKey.ALBUM)?.let { album = it; sortAlbum = it }
-                getStr(FieldKey.ALBUM_SORT)?.let { sortAlbum = it }
-
-                getStr(FieldKey.GENRE)?.let { genre = it }
-                getStr(FieldKey.YEAR)?.let { year = it.take(4).toIntOrNull() ?: year }
-
-                getStr(FieldKey.TRACK)?.let { trackNum = it.substringBefore('/').trim().toIntOrNull() ?: trackNum }
-                getStr(FieldKey.DISC_NO)?.let { discNum = it.substringBefore('/').trim().toIntOrNull() ?: discNum }
-
-                // Artwork is extracted separately so a failure here doesn't lose all metadata
-                try {
-                    val artwork = tag.firstArtwork
-                    if (artwork != null && artwork.binaryData != null) {
-                        try {
-                            val art = persistEmbeddedArtwork(context, track.id, artwork.binaryData, track.albumId)
-                            if (art != null) albumArtUri = art
-                        } catch (_: Exception) { android.util.Log.w("enrichTrack", "artwork persist failed") }
-                    }
-                } catch (_: Exception) { android.util.Log.w("enrichTrack", "artwork extraction failed") }
-            }
-
-            val header = audioFile.audioHeader
-            if (header != null && header.trackLength > 0) {
-                duration = header.trackLength * 1000L
-            }
-
-            val enriched = com.example.dpadplayer.playback.Track(
-                id = track.id,
-                uri = track.uri,
-                filePath = track.filePath,
-                title = title,
-                sortTitle = sortTitle,
-                artist = artist,
-                sortArtist = sortArtist,
-                albumArtist = albumArtist,
-                sortAlbumArtist = sortAlbumArtist,
-                album = album,
-                sortAlbum = sortAlbum,
-                albumId = track.albumId,
-                trackNumber = trackNum,
-                discNumber = discNum,
-                year = year,
-                genre = genre,
-                duration = duration,
-                dateAdded = track.dateAdded,
-                albumArtUri = albumArtUri,
-                mediaStoreAlbumArtUri = track.mediaStoreAlbumArtUri,
-            )
-            // Publish metadata event so UI/library can update incrementally
-            try { ArtRepository.publishMetadata(MetadataEvent(enriched.id, enriched)) } catch (_: Exception) { }
-            // Persist enriched track metadata to the track cache so we don't re-enrich on next start
-            try {
-                val db = AppDatabase.getInstance(context)
-                val path = enriched.albumArtUri.path ?: ""
-                val t = com.example.dpadplayer.db.TrackCacheEntity(
-                    sourceUri = enriched.uri.toString(),
-                    trackId = enriched.id,
-                    title = enriched.title,
-                    sortTitle = enriched.sortTitle,
-                    artist = enriched.artist,
-                    sortArtist = enriched.sortArtist,
-                    albumArtist = enriched.albumArtist,
-                    sortAlbumArtist = enriched.sortAlbumArtist,
-                    album = enriched.album,
-                    sortAlbum = enriched.sortAlbum,
-                    albumId = enriched.albumId,
-                    trackNumber = enriched.trackNumber,
-                    discNumber = enriched.discNumber,
-                    year = enriched.year,
-                    genre = enriched.genre,
-                    duration = enriched.duration,
-                    dateAdded = enriched.dateAdded,
-                    albumArtPath = path,
-                )
-                val writeScope = scope ?: defaultScope
-                writeScope.launch(Dispatchers.IO) {
-                    try { db.trackCacheDao().upsert(t) } catch (_: Exception) { }
-                }
-            } catch (_: Exception) { }
-            return enriched
+            uriRetriever.setDataSource(context, track.uri)
+            return uriRetriever
+        } catch (_: Exception) {
+            try { uriRetriever.release() } catch (_: Exception) { }
+        }
+        if (track.filePath.isBlank()) return null
+        val pathRetriever = MediaMetadataRetriever()
+        return try {
+            pathRetriever.setDataSource(track.filePath)
+            pathRetriever
         } catch (e: Exception) {
-            android.util.Log.e("enrichTrack", "enrich failed for ${track.id}", e)
-            return track
+            try { pathRetriever.release() } catch (_: Exception) { }
+            android.util.Log.w("MediaStoreScanner", "No metadata source available for track " + track.id, e)
+            null
         }
     }
 
     /**
-     * Returns a readable [File] for the given track.
-     * On scoped storage (Android 10+), direct file path access may be denied.
-     * Falls back to copying via ContentResolver to app-private cache.
+     * Enrich a track using Android's built-in MediaMetadataRetriever. Individual
+     * fields fall back to MediaStore values and an unreadable file cannot abort
+     * the library scan.
      */
-    private fun resolveReadableFile(context: Context, track: com.example.dpadplayer.playback.Track): File? {
-        val f = File(track.filePath)
-        if (f.canRead()) return f
-        // Scoped storage: copy via ContentResolver to a temp file in cache dir
-        return try {
-            context.contentResolver.openInputStream(track.uri)?.use { input ->
-                val tmpDir = File(context.cacheDir, "temp_enrich")
-                tmpDir.mkdirs()
-                val tmp = File(tmpDir, "${track.id}.mp3")
-                if (!tmp.exists()) {
-                    FileOutputStream(tmp).use { output -> input.copyTo(output) }
-                }
-                tmp
+    fun enrichTrack(
+        context: Context,
+        track: com.example.dpadplayer.playback.Track
+    ): com.example.dpadplayer.playback.Track {
+        val retriever = openMetadataRetriever(context, track) ?: return track
+        var title = track.title
+        var sortTitle = track.sortTitle
+        var artist = track.artist
+        var sortArtist = track.sortArtist
+        var albumArtist = track.albumArtist
+        var sortAlbumArtist = track.sortAlbumArtist
+        var album = track.album
+        var sortAlbum = track.sortAlbum
+        var trackNum = track.trackNumber
+        var discNum = track.discNumber
+        var year = track.year
+        var genre = track.genre
+        var duration = track.duration
+        var artworkBytes: ByteArray? = null
+
+        try {
+            fun value(key: Int): String? = try {
+                retriever.extractMetadata(key)?.trim()?.takeIf { it.isNotEmpty() }
+            } catch (_: Exception) { null }
+
+            value(MediaMetadataRetriever.METADATA_KEY_TITLE)?.let {
+                title = it
+                if (track.sortTitle == track.title) sortTitle = it
             }
-        } catch (_: Exception) { null }
+            val tagArtist = value(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+            if (tagArtist != null) {
+                artist = tagArtist
+                if (track.sortArtist == track.artist) sortArtist = tagArtist
+                if (track.albumArtist == track.artist) {
+                    albumArtist = tagArtist
+                    if (track.sortAlbumArtist == track.albumArtist) sortAlbumArtist = tagArtist
+                }
+            }
+            value(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST)?.let {
+                albumArtist = it
+                if (track.sortAlbumArtist == track.albumArtist) sortAlbumArtist = it
+            }
+            value(MediaMetadataRetriever.METADATA_KEY_ALBUM)?.let {
+                album = it
+                if (track.sortAlbum == track.album) sortAlbum = it
+            }
+            value(MediaMetadataRetriever.METADATA_KEY_GENRE)?.let { genre = it }
+            value(MediaMetadataRetriever.METADATA_KEY_YEAR)?.let {
+                year = it.take(4).toIntOrNull() ?: year
+            } ?: value(MediaMetadataRetriever.METADATA_KEY_DATE)?.let {
+                year = it.take(4).toIntOrNull() ?: year
+            }
+            value(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER)?.let {
+                trackNum = it.substringBefore('/').trim().toIntOrNull() ?: trackNum
+            }
+            value(MediaMetadataRetriever.METADATA_KEY_DISC_NUMBER)?.let {
+                discNum = it.substringBefore('/').trim().toIntOrNull() ?: discNum
+            }
+            value(MediaMetadataRetriever.METADATA_KEY_DURATION)?.let {
+                duration = it.toLongOrNull() ?: duration
+            }
+            artworkBytes = try {
+                retriever.embeddedPicture
+            } catch (e: Exception) {
+                android.util.Log.w("MediaStoreScanner", "Artwork extraction failed for track " + track.id, e)
+                null
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MediaStoreScanner", "Metadata enrichment failed for track " + track.id, e)
+            return track
+        } finally {
+            try { retriever.release() } catch (_: Exception) { }
+        }
+
+        val albumArtUri = try {
+            artworkBytes?.let { persistEmbeddedArtwork(context, track.id, it, track.albumId) }
+                ?: track.albumArtUri
+        } catch (e: Exception) {
+            android.util.Log.w("MediaStoreScanner", "Could not cache artwork for track " + track.id, e)
+            track.albumArtUri
+        }
+        val enriched = track.copy(
+            title = title,
+            sortTitle = sortTitle,
+            artist = artist,
+            sortArtist = sortArtist,
+            albumArtist = albumArtist,
+            sortAlbumArtist = sortAlbumArtist,
+            album = album,
+            sortAlbum = sortAlbum,
+            trackNumber = trackNum,
+            discNumber = discNum,
+            year = year,
+            genre = genre,
+            duration = duration,
+            albumArtUri = albumArtUri
+        )
+        try { ArtRepository.publishMetadata(MetadataEvent(enriched.id, enriched)) } catch (_: Exception) { }
+
+        try {
+            val db = AppDatabase.getInstance(context)
+            val cache = com.example.dpadplayer.db.TrackCacheEntity(
+                sourceUri = enriched.uri.toString(),
+                trackId = enriched.id,
+                title = enriched.title,
+                sortTitle = enriched.sortTitle,
+                artist = enriched.artist,
+                sortArtist = enriched.sortArtist,
+                albumArtist = enriched.albumArtist,
+                sortAlbumArtist = enriched.sortAlbumArtist,
+                album = enriched.album,
+                sortAlbum = enriched.sortAlbum,
+                albumId = enriched.albumId,
+                trackNumber = enriched.trackNumber,
+                discNumber = enriched.discNumber,
+                year = enriched.year,
+                genre = enriched.genre,
+                duration = enriched.duration,
+                dateAdded = enriched.dateAdded,
+                albumArtPath = enriched.albumArtUri.path ?: ""
+            )
+            val writeScope = scope ?: defaultScope
+            writeScope.launch(Dispatchers.IO) {
+                try { db.trackCacheDao().upsert(cache) } catch (_: Exception) { }
+            }
+        } catch (_: Exception) { }
+        return enriched
     }
 
     private fun persistEmbeddedArtwork(context: Context, trackId: Long, bytes: ByteArray, albumId: Long = 0L): Uri? {
