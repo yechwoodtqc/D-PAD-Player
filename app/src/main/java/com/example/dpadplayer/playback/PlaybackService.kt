@@ -193,7 +193,8 @@ class PlaybackService : Service() {
                         // API 23 foreground notifications cannot reliably be swiped away.
                         // Remove the service when genuinely paused by default, but never
                         // stop it while buffering or changing tracks.
-                        if (!keepServiceWhenPaused() && !player.playWhenReady && !isTransitioning) {
+                        if (!keepServiceWhenPaused() && !player.playWhenReady &&
+                            !isTransitioning && !pausedForTransientFocusLoss) {
                             requestServiceStop(removeNotification = true)
                             return
                         }
@@ -414,9 +415,11 @@ class PlaybackService : Service() {
     }
 
     private fun pausePlayback(releaseAudioFocus: Boolean = true) {
+        // Clear a transient-pause marker before player.pause() dispatches callbacks
+        // for a deliberate user pause, so the normal dismiss-on-pause behavior runs.
+        if (releaseAudioFocus) pausedForTransientFocusLoss = false
         player.pause()
         if (releaseAudioFocus) {
-            pausedForTransientFocusLoss = false
             abandonAudioFocus()
         }
     }
