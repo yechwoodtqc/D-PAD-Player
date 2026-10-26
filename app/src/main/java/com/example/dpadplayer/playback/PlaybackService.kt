@@ -850,7 +850,7 @@ class PlaybackService : Service() {
             val playPausePendingIntent = if (player.isPlaying) pausePendingIntent else playPendingIntent
             val compact = RemoteViews(packageName, R.layout.notification_player_compact)
             populateNotificationRemoteViews(
-                compact, t, openIntent, prevPendingIntent, playPausePendingIntent, nextPendingIntent, null
+                compact, t, openIntent, prevPendingIntent, playPausePendingIntent, nextPendingIntent, stopPendingIntent
             )
             builder.setCustomContentView(compact)
             val expanded = RemoteViews(packageName, R.layout.notification_player_expanded)

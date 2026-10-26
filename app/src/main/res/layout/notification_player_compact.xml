@@ -38,7 +38,7 @@
 
     <ImageButton
         android:id="@+id/notification_previous"
-        android:layout_width="40dp"
+        android:layout_width="36dp"
         android:layout_height="48dp"
         android:background="@android:drawable/btn_default"
         android:contentDescription="@string/notification_action_previous"
@@ -68,4 +68,15 @@
         android:padding="8dp"
         android:scaleType="centerInside"
         android:src="@drawable/ic_skip_next" />
+
+    <ImageButton
+        android:id="@+id/notification_stop"
+        android:layout_width="36dp"
+        android:layout_height="48dp"
+        android:background="@android:drawable/btn_default"
+        android:contentDescription="@string/notification_action_stop"
+        android:focusable="true"
+        android:padding="6dp"
+        android:scaleType="centerInside"
+        android:src="@drawable/ic_stop" />
 </LinearLayout>
