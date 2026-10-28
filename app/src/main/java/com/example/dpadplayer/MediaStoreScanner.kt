@@ -11,6 +11,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import android.provider.MediaStore
+import org.json.JSONArray
+import org.json.JSONObject
 import com.example.dpadplayer.playback.Track
 import java.io.File
 import com.example.dpadplayer.db.AppDatabase
@@ -38,6 +40,12 @@ object MediaStoreScanner {
 
     suspend fun loadTracks(context: Context, sortOrder: String = "title"): List<Track> {
         val raw = collectRawRows(context)
+        // If MediaStore is temporarily empty/unavailable at startup, restore the last
+        // known library instead of presenting an empty library on every launch.
+        if (raw.isEmpty()) {
+            val saved = loadLibrarySnapshot(context)
+            if (saved.isNotEmpty()) return applySortOrder(saved, sortOrder)
+        }
         // Load track cache to avoid re-enriching files that were previously processed.
         val db = try { AppDatabase.getInstance(context) } catch (_: Exception) { null }
         val rawUris = raw.map { it.uri.toString() }
@@ -82,7 +90,72 @@ object MediaStoreScanner {
                 enrichWithRetriever(row)
             }
         }
+        if (tracks.isNotEmpty()) saveLibrarySnapshot(context, tracks)
         return applySortOrder(tracks, sortOrder)
+    }
+
+
+    private fun snapshotFile(context: Context): File =
+        File(context.filesDir, "music_library_snapshot.json")
+
+    private fun saveLibrarySnapshot(context: Context, tracks: List<Track>) {
+        try {
+            val array = JSONArray()
+            tracks.forEach { t ->
+                array.put(JSONObject().apply {
+                    put("id", t.id); put("uri", t.uri.toString()); put("filePath", t.filePath)
+                    put("title", t.title); put("sortTitle", t.sortTitle)
+                    put("artist", t.artist); put("sortArtist", t.sortArtist)
+                    put("albumArtist", t.albumArtist); put("sortAlbumArtist", t.sortAlbumArtist)
+                    put("album", t.album); put("sortAlbum", t.sortAlbum); put("albumId", t.albumId)
+                    put("trackNumber", t.trackNumber); put("discNumber", t.discNumber)
+                    put("year", t.year); put("genre", t.genre); put("duration", t.duration)
+                    put("dateAdded", t.dateAdded); put("albumArtUri", t.albumArtUri.toString())
+                    put("mediaStoreAlbumArtUri", t.mediaStoreAlbumArtUri.toString())
+                })
+            }
+            val file = snapshotFile(context)
+            val temp = File(context.filesDir, "music_library_snapshot.tmp")
+            temp.writeText(array.toString())
+            if (file.exists()) file.delete()
+            temp.renameTo(file)
+        } catch (e: Exception) {
+            android.util.Log.w("MediaStoreScanner", "Could not save library snapshot", e)
+        }
+    }
+
+    private fun loadLibrarySnapshot(context: Context): List<Track> {
+        val file = snapshotFile(context)
+        if (!file.isFile) return emptyList()
+        return try {
+            val array = JSONArray(file.readText())
+            (0 until array.length()).mapNotNull { i ->
+                try {
+                    val o = array.getJSONObject(i)
+                    Track(
+                        id = o.getLong("id"), uri = Uri.parse(o.getString("uri")),
+                        filePath = o.optString("filePath", ""),
+                        title = o.optString("title", "Unknown"),
+                        sortTitle = o.optString("sortTitle", o.optString("title", "Unknown")),
+                        artist = o.optString("artist", "Unknown"),
+                        sortArtist = o.optString("sortArtist", o.optString("artist", "Unknown")),
+                        albumArtist = o.optString("albumArtist", o.optString("artist", "Unknown")),
+                        sortAlbumArtist = o.optString("sortAlbumArtist", o.optString("albumArtist", "Unknown")),
+                        album = o.optString("album", "Unknown"),
+                        sortAlbum = o.optString("sortAlbum", o.optString("album", "Unknown")),
+                        albumId = o.optLong("albumId", 0L),
+                        trackNumber = o.optInt("trackNumber", 0), discNumber = o.optInt("discNumber", 0),
+                        year = o.optInt("year", 0), genre = o.optString("genre", ""),
+                        duration = o.optLong("duration", 0L), dateAdded = o.optLong("dateAdded", 0L),
+                        albumArtUri = Uri.parse(o.optString("albumArtUri", Track.albumArtUri(o.optLong("albumId", 0L)).toString())),
+                        mediaStoreAlbumArtUri = Uri.parse(o.optString("mediaStoreAlbumArtUri", Track.albumArtUri(o.optLong("albumId", 0L)).toString()))
+                    )
+                } catch (_: Exception) { null }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("MediaStoreScanner", "Could not read library snapshot", e)
+            emptyList()
+        }
     }
 
     // ── Step 1: MediaStore bulk query ─────────────────────────────────────────
